@@ -46,32 +46,33 @@ class RivoApi {
   Future<Map<String, dynamic>> createRoom({
     required String title,
     required String description,
-    required String roomId,
     XFile? image,
   }) async {
     final userId = client.auth.currentUser?.id;
     if (userId == null) throw StateError('Sign in before creating a room.');
-    final existing = await client
-        .from('rooms')
-        .select(
-            'id, owner_id, title, description, image_path, is_active, created_at')
-        .eq('id', roomId)
-        .maybeSingle();
-    final row = existing ??
-        await client
-            .from('rooms')
-            .insert({
-              'id': roomId,
-              'owner_id': userId,
-              'title': title,
-              'description': description,
-              'is_active': true,
-            })
-            .select('id, owner_id, title, description, is_active, created_at')
-            .single();
-    if (row['owner_id']?.toString() != userId) {
-      throw StateError('This room ID belongs to another user.');
+    
+    // Call the backend RPC to create the room
+    final rows = await client.rpc(
+      'create_room',
+      params: {
+        'p_title': title.trim(),
+        'p_description': description.trim().isEmpty ? null : description.trim(),
+      },
+    );
+    
+    // The RPC returns a list with one row (the created room)
+    if (rows == null || (rows is List && rows.isEmpty)) {
+      throw StateError('Room creation returned no data from the backend.');
     }
+    
+    final row = rows is List ? rows.first as Map<String, dynamic> : rows as Map<String, dynamic>;
+    final roomId = row['id']?.toString();
+    
+    if (roomId == null) {
+      throw StateError('Room ID is missing from the backend response.');
+    }
+    
+    // Upload image if provided
     if (image != null) {
       final path = await uploadImage(
         image,
@@ -81,6 +82,7 @@ class RivoApi {
       await client.from('rooms').update({'image_path': path}).eq('id', roomId);
       row['image_path'] = path;
     }
+    
     return row;
   }
 
