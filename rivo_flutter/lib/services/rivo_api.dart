@@ -1,9 +1,20 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:image_picker/image_picker.dart';
+import 'phone_image_upload.dart';
 
 class RivoApi {
   RivoApi(this.client);
 
   final SupabaseClient client;
+
+  PhoneImageUpload get _images => PhoneImageUpload(client);
+
+    String? imageUrl(Object? path, {required String bucket}) =>
+      _images.publicUrl(path, bucket: bucket);
+
+    Future<String> uploadImage(XFile image,
+        {required String bucket, required String path}) =>
+      _images.upload(image, bucket: bucket, path: path);
 
   Future<Map<String, dynamic>?> myProfile() async {
     final user = client.auth.currentUser;
@@ -25,10 +36,52 @@ class RivoApi {
   Future<List<Map<String, dynamic>>> activeRooms() async {
     final rows = await client
         .from('rooms')
-        .select('id, owner_id, title, description, is_active, created_at')
+        .select(
+            'id, owner_id, title, description, image_path, is_active, created_at')
         .eq('is_active', true)
         .order('created_at', ascending: false);
     return List<Map<String, dynamic>>.from(rows);
+  }
+
+  Future<Map<String, dynamic>> createRoom({
+    required String title,
+    required String description,
+    required String roomId,
+    XFile? image,
+  }) async {
+    final userId = client.auth.currentUser?.id;
+    if (userId == null) throw StateError('Sign in before creating a room.');
+    final existing = await client
+        .from('rooms')
+        .select(
+            'id, owner_id, title, description, image_path, is_active, created_at')
+        .eq('id', roomId)
+        .maybeSingle();
+    final row = existing ??
+        await client
+            .from('rooms')
+            .insert({
+              'id': roomId,
+              'owner_id': userId,
+              'title': title,
+              'description': description,
+              'is_active': true,
+            })
+            .select('id, owner_id, title, description, is_active, created_at')
+            .single();
+    if (row['owner_id']?.toString() != userId) {
+      throw StateError('This room ID belongs to another user.');
+    }
+    if (image != null) {
+      final path = await uploadImage(
+        image,
+        bucket: PhoneImageUpload.roomsBucket,
+        path: '$userId/$roomId/image.jpg',
+      );
+      await client.from('rooms').update({'image_path': path}).eq('id', roomId);
+      row['image_path'] = path;
+    }
+    return row;
   }
 
   Future<void> joinRoom(String roomId) async {
@@ -113,6 +166,17 @@ class RivoApi {
         .maybeSingle();
   }
 
+  Future<Map<String, dynamic>?> economyConfig() async {
+    final rows = await client.from('economy_config').select().limit(1);
+    final configs = List<Map<String, dynamic>>.from(rows);
+    return configs.firstOrNull;
+  }
+
+  Future<List<Map<String, dynamic>>> rechargePackages() async {
+    final rows = await client.from('recharge_packages').select();
+    return List<Map<String, dynamic>>.from(rows);
+  }
+
   Future<List<Map<String, dynamic>>> coinTransactions() async {
     final userId = client.auth.currentUser?.id;
     if (userId == null) return [];
@@ -168,13 +232,60 @@ class RivoApi {
         .select()
         .order('created_at', ascending: false)
         .limit(100);
-    return List<Map<String, dynamic>>.from(rows);
+    final moments = List<Map<String, dynamic>>.from(rows);
+    return moments.map((moment) {
+      return {
+        ...moment,
+        'author': {
+          'display_name': moment['author_name'],
+          'avatar_path': moment['author_avatar_path'],
+        },
+      };
+    }).toList();
   }
 
-  Future<void> createMoment(String body) async {
+  Future<void> createMoment(String body,
+      {required String momentId, XFile? image}) async {
     final userId = client.auth.currentUser?.id;
     if (userId == null) throw StateError('Sign in before posting a Moment.');
-    await client.from('moments').insert({'user_id': userId, 'body': body});
+    final profile = await myProfile();
+    final metadata = client.auth.currentUser?.userMetadata ?? {};
+    final authorName = (profile?['display_name'] ??
+            profile?['username'] ??
+            metadata['full_name'] ??
+            metadata['name'] ??
+            'Rivo user')
+        .toString();
+    String? imagePath;
+    if (image != null) {
+      imagePath = await uploadImage(
+        image,
+        bucket: PhoneImageUpload.momentsBucket,
+        path: '$userId/$momentId/image.jpg',
+      );
+    }
+    await client.from('moments').upsert({
+      'id': momentId,
+      'user_id': userId,
+      'body': body,
+      'content': body,
+      'image_path': imagePath,
+      'author_name': authorName,
+      'author_avatar_path': profile?['avatar_path'],
+    }, onConflict: 'id');
+  }
+
+  Future<void> deleteMoment(String momentId) async {
+    final moment = await client
+        .from('moments')
+        .select('image_path')
+        .eq('id', momentId)
+        .maybeSingle();
+    await client.from('moments').delete().eq('id', momentId);
+    await _images.remove(
+      moment?['image_path'],
+      bucket: PhoneImageUpload.momentsBucket,
+    );
   }
 
   Future<List<Map<String, dynamic>>> directMessages() async {
@@ -211,6 +322,17 @@ class RivoApi {
             }).toList());
   }
 
+  Future<void> markDirectMessagesRead(String otherUserId) async {
+    final userId = client.auth.currentUser?.id;
+    if (userId == null) throw StateError('Sign in to update message state.');
+    await client
+        .from('messages')
+        .update({'read_at': DateTime.now().toUtc().toIso8601String()})
+        .eq('sender_id', otherUserId)
+        .eq('receiver_id', userId)
+        .isFilter('read_at', null);
+  }
+
   Future<List<Map<String, dynamic>>> notifications() async {
     final userId = client.auth.currentUser?.id;
     if (userId == null) return [];
@@ -221,6 +343,26 @@ class RivoApi {
         .order('created_at', ascending: false)
         .limit(100);
     return List<Map<String, dynamic>>.from(rows);
+  }
+
+  Stream<List<Map<String, dynamic>>> watchNotifications() {
+    final userId = client.auth.currentUser?.id;
+    if (userId == null) return Stream.value(const []);
+    return client
+        .from('notifications')
+        .stream(primaryKey: ['id'])
+        .eq('user_id', userId)
+        .order('created_at', ascending: false);
+  }
+
+  Future<void> markNotificationRead(String notificationId) async {
+    final userId = client.auth.currentUser?.id;
+    if (userId == null) throw StateError('Sign in to update notifications.');
+    await client
+        .from('notifications')
+        .update({'is_read': true})
+        .eq('id', notificationId)
+        .eq('user_id', userId);
   }
 
   Future<Map<String, dynamic>?> mySettings() async {

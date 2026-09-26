@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:rivo/screens/home_screen.dart';
 import 'package:rivo/screens/profile_screen.dart';
 import 'package:rivo/widgets/common.dart';
@@ -10,6 +11,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 void main() {
   setUpAll(() async {
+    GoogleFonts.config.allowRuntimeFetching = false;
     SharedPreferences.setMockInitialValues({});
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
       ..setMockMethodCallHandler(
@@ -94,9 +96,71 @@ void main() {
     expect(find.byType(RivoBottomNav), findsOneWidget);
     expect(
       find.byType(CircularProgressIndicator).evaluate().isNotEmpty ||
-          find.text('Retry').evaluate().isNotEmpty,
+          find.text('Retry').evaluate().isNotEmpty ||
+          find.text('Profile ID: —').evaluate().isNotEmpty,
       isTrue,
     );
+
+    for (final tab in [
+      'Room',
+      'Moment',
+      'Message',
+      'Me',
+      'Room',
+      'Message',
+      'Moment',
+      'Me',
+      'Room',
+    ]) {
+      await tester.tap(find.text(tab).last);
+      await tester.pump();
+      final exception = tester.takeException();
+      final reason = exception is FlutterError
+          ? exception.toStringDeep()
+          : 'while switching to $tab: $exception';
+      expect(exception, isNull, reason: reason);
+      expect(find.byType(RivoBottomNav), findsOneWidget);
+    }
+
+    final navigator =
+        tester.state<NavigatorState>(find.byType(Navigator).first);
+    navigator.push<void>(
+      MaterialPageRoute<void>(builder: (_) => const CreateRoomScreen()),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Room name'), findsOneWidget);
+    navigator.pop();
+    await tester.pumpAndSettle();
+    expect(find.text('Room name'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Create Room form has phone-photo UI and required room name',
+      (tester) async {
+    await tester.pumpWidget(const MaterialApp(home: CreateRoomScreen()));
+
+    expect(find.text('Create Room'), findsNWidgets(2));
+    expect(find.text('Room photo'), findsOneWidget);
+    expect(find.text('Room name'), findsOneWidget);
+    expect(find.text('Room bio (optional)'), findsOneWidget);
+    expect(find.textContaining('URL'), findsNothing);
+  });
+
+  testWidgets('Moment composer and Edit Profile have no image URL inputs',
+      (tester) async {
+    await tester.pumpWidget(const MaterialApp(home: CreateMomentScreen()));
+    expect(find.text("What's happening?"), findsOneWidget);
+    expect(find.text('Add photo'), findsOneWidget);
+    expect(find.textContaining('URL'), findsNothing);
+
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: EditProfileScreen(profile: {'public_id': 100000}),
+      ),
+    );
+    expect(find.text('Profile ID'), findsOneWidget);
+    expect(find.text('100000'), findsOneWidget);
+    expect(find.textContaining('URL'), findsNothing);
   });
 
   testWidgets('bottom navigation reports the selected tab', (tester) async {

@@ -242,7 +242,7 @@ class _VoiceRoomScreenState extends State<VoiceRoomScreen> {
                                   size: 12.5,
                                   weight: FontWeight.w800,
                                   color: AppColors.roomText)),
-                          Text('ID: ${widget.hostId}',
+                          Text('Room host',
                               style: AppTextStyles.label(
                                   size: 10, color: AppColors.roomTextMute)),
                         ],

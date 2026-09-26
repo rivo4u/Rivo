@@ -114,7 +114,8 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Text('ID: ${widget.userId}',
+              Text(
+                  'ID: ${int.tryParse(widget.userId) != null ? widget.userId : '—'}',
                   style: AppTextStyles.body(size: 12.5, color: Colors.white70)),
               const SizedBox(width: 4),
               const Icon(Icons.copy_rounded, size: 13, color: Colors.white70),
@@ -124,11 +125,11 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              _levelPill(Icons.diamond_rounded, '70'),
+              _levelPill(Icons.diamond_rounded, '—'),
               const SizedBox(width: 8),
-              _levelPill(Icons.monetization_on_rounded, '45'),
+              _levelPill(Icons.monetization_on_rounded, '—'),
               const SizedBox(width: 8),
-              _levelPill(Icons.emoji_events_rounded, '17'),
+              _levelPill(Icons.emoji_events_rounded, '—'),
             ],
           ),
           const SizedBox(height: 14),
@@ -192,15 +193,13 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
         mainAxisAlignment: MainAxisAlignment.spaceAround,
         children: [
           StatColumn(
-              value: '138', label: 'Friend', valueColor: AppColors.greenDarker),
+              value: '—', label: 'Friend', valueColor: AppColors.greenDarker),
           StatColumn(
-              value: '31', label: 'Follow', valueColor: AppColors.greenDarker),
+              value: '—', label: 'Follow', valueColor: AppColors.greenDarker),
           StatColumn(
-              value: '124', label: 'Fans', valueColor: AppColors.greenDarker),
+              value: '—', label: 'Fans', valueColor: AppColors.greenDarker),
           StatColumn(
-              value: '1520',
-              label: 'Visitor',
-              valueColor: AppColors.greenDarker),
+              value: '—', label: 'Visitor', valueColor: AppColors.greenDarker),
         ],
       ),
     );

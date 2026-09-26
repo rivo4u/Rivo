@@ -1,8 +1,14 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:uuid/uuid.dart';
 import '../services/rivo_api.dart';
+import '../services/phone_image_upload.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_text_styles.dart';
+import '../widgets/common.dart';
 
 class WalletScreen extends StatefulWidget {
   const WalletScreen({super.key});
@@ -14,11 +20,13 @@ class WalletScreen extends StatefulWidget {
 class _WalletScreenState extends State<WalletScreen> {
   final _api = RivoApi(Supabase.instance.client);
   late Future<_WalletData> _data;
+  late Future<_RechargeData> _rechargeData;
 
   @override
   void initState() {
     super.initState();
     _data = _load();
+    _rechargeData = _loadRechargeData();
   }
 
   Future<_WalletData> _load() async => _WalletData(
@@ -27,6 +35,12 @@ class _WalletScreenState extends State<WalletScreen> {
         await _api.giftHistory(),
         await _api.gifts(),
       );
+
+  Future<_RechargeData> _loadRechargeData() async {
+    final configFuture = _api.economyConfig();
+    final packagesFuture = _api.rechargePackages();
+    return _RechargeData(await configFuture, await packagesFuture);
+  }
 
   void _refresh() => setState(() => _data = _load());
 
@@ -74,6 +88,8 @@ class _WalletScreenState extends State<WalletScreen> {
                       ]),
                 ),
                 const SizedBox(height: 22),
+                _rechargeSection(),
+                const SizedBox(height: 22),
                 Text('Gift history', style: AppTextStyles.heading(size: 17)),
                 if (data.giftHistory.isEmpty)
                   const ListTile(title: Text('No gifts yet')),
@@ -93,6 +109,92 @@ class _WalletScreenState extends State<WalletScreen> {
       ),
     );
   }
+
+  Widget _rechargeSection() => FutureBuilder<_RechargeData>(
+        future: _rechargeData,
+        builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Recharge packages',
+                    style: AppTextStyles.heading(size: 17)),
+                const SizedBox(height: 8),
+                Text('Could not load backend recharge configuration.'),
+                TextButton.icon(
+                  onPressed: () =>
+                      setState(() => _rechargeData = _loadRechargeData()),
+                  icon: const Icon(Icons.refresh_rounded),
+                  label: const Text('Retry'),
+                ),
+              ],
+            );
+          }
+          if (!snapshot.hasData) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          final data = snapshot.data!;
+          final rate = _firstValue(data.config, ['usd_to_coins']);
+          final minimum = _firstValue(
+              data.config, ['min_recharge_usd', 'minimum_recharge_usd']);
+          final maximum = _firstValue(
+              data.config, ['max_recharge_usd', 'maximum_recharge_usd']);
+          final packages = data.packages
+              .where((row) => row['is_active'] != false && row['active'] != false)
+              .toList();
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Recharge packages',
+                  style: AppTextStyles.heading(size: 17)),
+              if (rate != null) ...[
+                const SizedBox(height: 6),
+                Text('Backend rate: $rate coins per USD'),
+              ],
+              if (minimum != null || maximum != null) ...[
+                const SizedBox(height: 3),
+                Text('Limits: ${minimum ?? '—'} to ${maximum ?? '—'} USD'),
+              ],
+              if (packages.isEmpty)
+                const ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text('No recharge packages are available.'))
+              else
+                for (final package in packages) _rechargePackage(package),
+              const SizedBox(height: 4),
+              Text(
+                'Payments are not configured. No recharge will be submitted or coins added.',
+                style: AppTextStyles.label(color: AppColors.textMute),
+              ),
+            ],
+          );
+        },
+      );
+
+  Widget _rechargePackage(Map<String, dynamic> package) {
+    final label = _firstValue(
+            package, ['name', 'title', 'label', 'package_name']) ??
+        'Recharge package';
+    final usd = _firstValue(
+        package, ['usd_amount', 'amount_usd', 'price_usd', 'usd']);
+    final coins = _firstValue(
+        package, ['coins', 'coin_amount', 'coins_amount', 'amount_coins']);
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      title: Text(label),
+      subtitle: Text([
+        if (usd != null) '\$$usd USD',
+        if (coins != null) '$coins coins',
+      ].join(' · ')),
+      trailing: TextButton(
+        onPressed: () => _showError(
+          context,
+          'Payment provider not configured. No recharge was created.',
+        ),
+        child: const Text('Unavailable'),
+      ),
+    );
+  }
 }
 
 class _WalletData {
@@ -102,6 +204,12 @@ class _WalletData {
   final List<Map<String, dynamic>> transactions;
   final List<Map<String, dynamic>> giftHistory;
   final List<Map<String, dynamic>> catalog;
+}
+
+class _RechargeData {
+  const _RechargeData(this.config, this.packages);
+  final Map<String, dynamic>? config;
+  final List<Map<String, dynamic>> packages;
 }
 
 class _TransactionTile extends StatelessWidget {
@@ -114,12 +222,14 @@ class _TransactionTile extends StatelessWidget {
     final kind =
         _firstValue(row, ['transaction_type', 'type', 'description']) ??
             'Coin transaction';
+    final status = _firstValue(row, ['status', 'transaction_status']) ??
+      'Status unavailable';
     return ListTile(
       leading: const Icon(Icons.toll_rounded, color: AppColors.greenDark),
       title: Text(kind.toString()),
       trailing: Text('$amount coins',
           style: AppTextStyles.body(weight: FontWeight.w700)),
-      subtitle: Text(_dateText(row['created_at'])),
+        subtitle: Text('$status · ${_dateText(row['created_at'])}'),
     );
   }
 }
@@ -194,42 +304,20 @@ class _MomentsScreenState extends State<MomentsScreen> {
   }
 
   Future<void> _compose() async {
-    final controller = TextEditingController();
-    final body = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('New Moment'),
-        content: TextField(
-            controller: controller,
-            autofocus: true,
-            maxLength: 1000,
-            maxLines: 5,
-            decoration: const InputDecoration(hintText: 'Share an update')),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel')),
-          FilledButton(
-              onPressed: () => Navigator.pop(context, controller.text.trim()),
-              child: const Text('Post'))
-        ],
-      ),
+    final posted = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(builder: (_) => const CreateMomentScreen()),
     );
-    controller.dispose();
-    if (body == null || body.isEmpty) return;
-    try {
-      await _api.createMoment(body);
-      if (mounted) setState(() => _moments = _api.moments());
-    } catch (error) {
-      if (mounted) _showError(context, 'Could not post Moment: $error');
-    }
+    if (mounted && posted == true) setState(() => _moments = _api.moments());
   }
 
   @override
   Widget build(BuildContext context) => Scaffold(
         appBar: AppBar(title: const Text('Moments')),
-        floatingActionButton: FloatingActionButton(
-            onPressed: _compose, child: const Icon(Icons.edit_rounded)),
+        floatingActionButton: FloatingActionButton.extended(
+          onPressed: _compose,
+          icon: const Icon(Icons.add_rounded),
+          label: const Text('Create Moment'),
+        ),
         body: FutureBuilder<List<Map<String, dynamic>>>(
           future: _moments,
           builder: (context, snapshot) {
@@ -244,18 +332,388 @@ class _MomentsScreenState extends State<MomentsScreen> {
               itemCount: snapshot.data!.length,
               itemBuilder: (context, index) {
                 final row = snapshot.data![index];
-                return ListTile(
-                  leading:
-                      const CircleAvatar(child: Icon(Icons.person_rounded)),
-                  title: Text(row['user_id']?.toString() ?? 'Rivo user',
-                      maxLines: 1, overflow: TextOverflow.ellipsis),
-                  subtitle: Text(
-                      '${row['body'] ?? ''}\n${_dateText(row['created_at'])}'),
-                  isThreeLine: true,
+                final author = row['author'] as Map<String, dynamic>?;
+                final own = row['user_id'] ==
+                    Supabase.instance.client.auth.currentUser?.id;
+                final imageUrl = _api.imageUrl(
+                  author?['avatar_path'],
+                  bucket: PhoneImageUpload.avatarsBucket,
+                );
+                final momentImage = _api.imageUrl(
+                  row['image_path'],
+                  bucket: PhoneImageUpload.momentsBucket,
+                );
+                return Card(
+                  margin: const EdgeInsets.fromLTRB(12, 7, 12, 3),
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(children: [
+                          AppAvatar(
+                            label: author?['display_name']?.toString() ?? 'R',
+                            size: 42,
+                            imageUrl: imageUrl,
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  author?['display_name']?.toString() ??
+                                      'Rivo user',
+                                  style: AppTextStyles.body(
+                                      weight: FontWeight.w700),
+                                ),
+                                Text(_dateText(row['created_at']),
+                                    style: AppTextStyles.label()),
+                              ],
+                            ),
+                          ),
+                          if (own)
+                            IconButton(
+                              tooltip: 'Delete Moment',
+                              onPressed: () => _deleteMoment(row),
+                              icon: const Icon(Icons.delete_outline_rounded),
+                            ),
+                        ]),
+                        if ((row['body'] ?? row['content'])
+                            .toString()
+                            .isNotEmpty) ...[
+                          const SizedBox(height: 10),
+                          Text((row['body'] ?? row['content']).toString()),
+                        ],
+                        if (momentImage != null) ...[
+                          const SizedBox(height: 10),
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: Image.network(
+                              momentImage,
+                              width: double.infinity,
+                              height: 240,
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, __, ___) => const SizedBox(
+                                height: 90,
+                                child: Center(
+                                    child: Icon(Icons.broken_image_outlined)),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
                 );
               },
             );
           },
+        ),
+      );
+
+  Future<void> _deleteMoment(Map<String, dynamic> row) async {
+    final id = row['id']?.toString();
+    if (id == null) return;
+    try {
+      await _api.deleteMoment(id);
+      if (mounted) setState(() => _moments = _api.moments());
+    } catch (error) {
+      if (mounted) _showError(context, 'Could not delete Moment: $error');
+    }
+  }
+}
+
+class CreateMomentScreen extends StatefulWidget {
+  const CreateMomentScreen({super.key});
+
+  @override
+  State<CreateMomentScreen> createState() => _CreateMomentScreenState();
+}
+
+class _CreateMomentScreenState extends State<CreateMomentScreen> {
+  final _api = RivoApi(Supabase.instance.client);
+  final _controller = TextEditingController();
+  final _momentId = const Uuid().v4();
+  Map<String, dynamic>? _profile;
+  XFile? _image;
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadProfile();
+  }
+
+  Future<void> _loadProfile() async {
+    try {
+      final profile = await _api.myProfile();
+      if (mounted) setState(() => _profile = profile);
+    } catch (_) {
+      // Posting remains available when the profile lookup is unavailable.
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickImage() async {
+    try {
+      final image = await PhoneImageUpload(Supabase.instance.client).pick();
+      if (mounted && image != null) setState(() => _image = image);
+    } catch (error) {
+      if (mounted)
+        setState(() => _error = 'Could not open photo picker: $error');
+    }
+  }
+
+  Future<void> _post() async {
+    final body = _controller.text.trim();
+    if (body.isEmpty) {
+      setState(() => _error = 'Write something before posting.');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await _api.createMoment(body, image: _image, momentId: _momentId);
+      if (mounted) Navigator.of(context).pop(true);
+    } catch (error) {
+      if (mounted)
+        setState(
+            () => _error = 'Could not post. Tap Retry to try again. $error');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final user = Supabase.instance.client.auth.currentUser;
+    final name = _profile?['display_name']?.toString() ??
+      _profile?['username']?.toString() ??
+      user?.userMetadata?['full_name']?.toString() ??
+        user?.userMetadata?['name']?.toString() ??
+        'Rivo user';
+    return Scaffold(
+      appBar: AppBar(title: const Text('Create Moment')),
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            Row(children: [
+              AppAvatar(
+                label: name,
+                size: 44,
+                imageUrl: _api.imageUrl(
+                  _profile?['avatar_path'],
+                  bucket: PhoneImageUpload.avatarsBucket,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Text(name, style: AppTextStyles.body(weight: FontWeight.w700)),
+            ]),
+            const SizedBox(height: 18),
+            TextField(
+              controller: _controller,
+              minLines: 4,
+              maxLines: 8,
+              maxLength: 1000,
+              decoration: const InputDecoration(
+                hintText: "What's happening?",
+                border: OutlineInputBorder(),
+              ),
+            ),
+            if (_image != null) ...[
+              const SizedBox(height: 12),
+              Stack(alignment: Alignment.topRight, children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Image.file(File(_image!.path),
+                      width: double.infinity, height: 240, fit: BoxFit.cover),
+                ),
+                IconButton.filledTonal(
+                  onPressed:
+                      _saving ? null : () => setState(() => _image = null),
+                  icon: const Icon(Icons.close_rounded),
+                ),
+              ]),
+            ],
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              onPressed: _saving ? null : _pickImage,
+              icon: const Icon(Icons.photo_library_outlined),
+              label: Text(_image == null ? 'Add photo' : 'Replace photo'),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 10),
+              Text(_error!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error)),
+            ],
+            const SizedBox(height: 14),
+            FilledButton(
+              onPressed: _saving ? null : _post,
+              child: _saving
+                  ? const SizedBox.square(
+                      dimension: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Text(_error == null ? 'Post' : 'Retry'),
+            ),
+            TextButton(
+              onPressed: _saving ? null : () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class CreateRoomScreen extends StatefulWidget {
+  const CreateRoomScreen({super.key});
+
+  @override
+  State<CreateRoomScreen> createState() => _CreateRoomScreenState();
+}
+
+class _CreateRoomScreenState extends State<CreateRoomScreen> {
+  final _api = RivoApi(Supabase.instance.client);
+  final _name = TextEditingController();
+  final _bio = TextEditingController();
+  final _roomId = const Uuid().v4();
+  XFile? _image;
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _bio.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickImage() async {
+    try {
+      final image = await PhoneImageUpload(Supabase.instance.client).pick();
+      if (mounted && image != null) setState(() => _image = image);
+    } catch (error) {
+      if (mounted)
+        setState(() => _error = 'Could not open photo picker: $error');
+    }
+  }
+
+  Future<void> _create() async {
+    final name = _name.text.trim();
+    if (name.isEmpty || name.length > 60) {
+      setState(() => _error =
+          name.isEmpty ? 'Enter a room name.' : 'Use 60 characters or fewer.');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      final room = await _api.createRoom(
+        title: name,
+        description: _bio.text.trim(),
+        roomId: _roomId,
+        image: _image,
+      );
+      if (mounted) Navigator.of(context).pop(room);
+    } catch (error) {
+      if (mounted)
+        setState(() =>
+            _error = 'Could not create room. Tap Retry to try again. $error');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        appBar: AppBar(title: const Text('Create Room')),
+        body: SafeArea(
+          child: ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              Center(
+                child: InkWell(
+                  onTap: _saving ? null : _pickImage,
+                  borderRadius: BorderRadius.circular(12),
+                  child: Container(
+                    width: 150,
+                    height: 120,
+                    clipBehavior: Clip.antiAlias,
+                    decoration: BoxDecoration(
+                      color: AppColors.greenLight,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: _image == null
+                        ? const Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.add_a_photo_outlined, size: 30),
+                              SizedBox(height: 6),
+                              Text('Room photo'),
+                            ],
+                          )
+                        : Image.file(File(_image!.path), fit: BoxFit.cover),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              TextButton.icon(
+                onPressed: _saving ? null : _pickImage,
+                icon: const Icon(Icons.photo_library_outlined),
+                label: Text(_image == null ? 'Choose photo' : 'Replace photo'),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _name,
+                maxLength: 60,
+                textCapitalization: TextCapitalization.sentences,
+                decoration: const InputDecoration(
+                  labelText: 'Room name',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 8),
+              TextFormField(
+                controller: _bio,
+                maxLength: 240,
+                maxLines: 3,
+                decoration: const InputDecoration(
+                  labelText: 'Room bio (optional)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              if (_error != null) ...[
+                const SizedBox(height: 10),
+                Text(_error!,
+                    style:
+                        TextStyle(color: Theme.of(context).colorScheme.error)),
+              ],
+              const SizedBox(height: 12),
+              FilledButton(
+                onPressed: _saving ? null : _create,
+                child: _saving
+                    ? const SizedBox.square(
+                        dimension: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : Text(_error == null ? 'Create Room' : 'Retry'),
+              ),
+            ],
+          ),
         ),
       );
 }
@@ -395,6 +853,20 @@ class _DirectChatScreenState extends State<DirectChatScreen> {
   final _controller = TextEditingController();
   final _scroll = ScrollController();
   bool _sending = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _markIncomingRead();
+  }
+
+  Future<void> _markIncomingRead() async {
+    try {
+      await _api.markDirectMessagesRead(widget.otherUserId);
+    } catch (error) {
+      if (mounted) _showError(context, 'Could not mark messages as read: $error');
+    }
+  }
 
   @override
   void dispose() {
@@ -552,23 +1024,45 @@ class NotificationsScreen extends StatefulWidget {
 
 class _NotificationsScreenState extends State<NotificationsScreen> {
   final _api = RivoApi(Supabase.instance.client);
-  late Future<List<Map<String, dynamic>>> _rows;
+  late Stream<List<Map<String, dynamic>>> _rows;
+  final Set<String> _optimisticallyRead = {};
+  int _streamVersion = 0;
 
   @override
   void initState() {
     super.initState();
-    _rows = _api.notifications();
+    _rows = _api.watchNotifications();
+  }
+
+  void _retry() {
+    setState(() {
+      _rows = _api.watchNotifications();
+      _streamVersion++;
+    });
+  }
+
+  Future<void> _markRead(Map<String, dynamic> row) async {
+    final id = row['id']?.toString();
+    if (id == null || row['is_read'] == true || _optimisticallyRead.contains(id)) {
+      return;
+    }
+    try {
+      await _api.markNotificationRead(id);
+      if (mounted) setState(() => _optimisticallyRead.add(id));
+    } catch (error) {
+      if (mounted) _showError(context, 'Could not mark notification as read: $error');
+    }
   }
 
   @override
   Widget build(BuildContext context) => Scaffold(
         appBar: AppBar(title: const Text('Notifications')),
-        body: FutureBuilder<List<Map<String, dynamic>>>(
-          future: _rows,
+        body: StreamBuilder<List<Map<String, dynamic>>>(
+          key: ValueKey(_streamVersion),
+          stream: _rows,
           builder: (context, snapshot) {
             if (snapshot.hasError)
-              return _errorState(snapshot.error,
-                  () => setState(() => _rows = _api.notifications()));
+              return _errorState(snapshot.error, _retry);
             if (!snapshot.hasData)
               return const Center(child: CircularProgressIndicator());
             if (snapshot.data!.isEmpty)
@@ -576,8 +1070,13 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             return ListView(children: [
               for (final row in snapshot.data!)
                 ListTile(
-                  leading: const Icon(Icons.notifications_none_rounded,
-                      color: AppColors.greenDark),
+                  leading: Icon(
+                    row['is_read'] == true ||
+                            _optimisticallyRead.contains(row['id']?.toString())
+                        ? Icons.notifications_none_rounded
+                        : Icons.notifications_active_rounded,
+                    color: AppColors.greenDark,
+                  ),
                   title: Text(_firstValue(row, ['title', 'type'])?.toString() ??
                       'Notification'),
                   subtitle: Text('${_firstValue(row, [
@@ -586,6 +1085,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                             'content'
                           ]) ?? ''}\n${_dateText(row['created_at'])}'),
                   isThreeLine: true,
+                          onTap: () => _markRead(row),
                 ),
             ]);
           },

@@ -2,8 +2,7 @@ import 'package:flutter/material.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_text_styles.dart';
 
-/// Circular avatar with initials fallback — swap `imageUrl` in once
-/// Supabase storage URLs are wired up.
+/// Circular avatar with a storage-image renderer and initials fallback.
 class AppAvatar extends StatelessWidget {
   final String label;
   final double size;
@@ -36,11 +35,32 @@ class AppAvatar extends StatelessWidget {
       alignment: Alignment.center,
       clipBehavior: Clip.antiAlias,
       child: imageUrl != null
-          ? Image.network(imageUrl!, fit: BoxFit.cover, width: size, height: size)
-          : Text(
-              label.isNotEmpty ? label[0].toUpperCase() : '?',
-              style: AppTextStyles.heading(size: size * 0.36, color: Colors.white),
-            ),
+          ? Image.network(
+              imageUrl!,
+              fit: BoxFit.cover,
+              width: size,
+              height: size,
+              errorBuilder: (_, __, ___) => _fallback(),
+            )
+          : _fallback(),
+    );
+  }
+
+  Widget _fallback() {
+    return DecoratedBox(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [AppColors.green, AppColors.greenDark],
+        ),
+      ),
+      child: Center(
+        child: Text(
+          label.isNotEmpty ? label[0].toUpperCase() : '?',
+          style: AppTextStyles.heading(size: size * 0.36, color: Colors.white),
+        ),
+      ),
     );
   }
 }
@@ -105,7 +125,8 @@ class GridIconItem extends StatelessWidget {
   final String label;
   final VoidCallback? onTap;
 
-  const GridIconItem({super.key, required this.icon, required this.label, this.onTap});
+  const GridIconItem(
+      {super.key, required this.icon, required this.label, this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -131,7 +152,10 @@ class GridIconItem extends StatelessWidget {
             Text(
               label,
               textAlign: TextAlign.center,
-              style: AppTextStyles.label(size: 11.5, color: AppColors.text),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: AppTextStyles.label(size: 10.5, color: AppColors.text)
+                  .copyWith(height: 1.2),
             ),
           ],
         ),
@@ -145,7 +169,8 @@ class RivoBottomNav extends StatelessWidget {
   final int currentIndex;
   final ValueChanged<int> onTap;
 
-  const RivoBottomNav({super.key, required this.currentIndex, required this.onTap});
+  const RivoBottomNav(
+      {super.key, required this.currentIndex, required this.onTap});
 
   static const _items = [
     (icon: Icons.home_rounded, label: 'Room'),

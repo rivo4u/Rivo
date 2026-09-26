@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_text_styles.dart';
 import '../services/rivo_api.dart';
+import '../services/phone_image_upload.dart';
 import '../widgets/common.dart';
 import 'feature_screens.dart';
 import 'profile_screen.dart';
@@ -17,6 +18,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int _selectedTab = 0;
+  final Set<int> _visitedTabs = {0};
   final RivoApi _api = RivoApi(Supabase.instance.client);
   List<Map<String, dynamic>> _rooms = [];
   bool _loading = true;
@@ -76,7 +78,10 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _onNavigationTap(int index) {
-    setState(() => _selectedTab = index);
+    setState(() {
+      _selectedTab = index;
+      _visitedTabs.add(index);
+    });
   }
 
   @override
@@ -89,7 +94,26 @@ class _HomeScreenState extends State<HomeScreen> {
           Positioned.fill(
             child: Padding(
               padding: const EdgeInsets.only(bottom: 78),
-              child: SafeArea(child: _selectedPage()),
+              child: SafeArea(
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    IndexedStack(
+                      index: _selectedTab,
+                      children: [
+                        for (var index = 0; index < 4; index++)
+                          _visitedTabs.contains(index)
+                              ? TickerMode(
+                                  key: ValueKey('rivo-tab-$index'),
+                                  enabled: _selectedTab == index,
+                                  child: _pageForTab(index),
+                                )
+                              : const SizedBox.shrink(),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
             ),
           ),
           Positioned(
@@ -106,8 +130,8 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _selectedPage() {
-    switch (_selectedTab) {
+  Widget _pageForTab(int index) {
+    switch (index) {
       case 0:
         return _roomList();
       case 1:
@@ -123,7 +147,20 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _roomList() {
     if (_loading && _rooms.isEmpty) {
-      return const Center(child: CircularProgressIndicator());
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const CircularProgressIndicator(),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: _createRoom,
+              icon: const Icon(Icons.add_rounded),
+              label: const Text('Create Room'),
+            ),
+          ],
+        ),
+      );
     }
     if (_error != null && _rooms.isEmpty) {
       return Center(
@@ -141,6 +178,12 @@ class _HomeScreenState extends State<HomeScreen> {
                 onPressed: _loadRooms,
                 icon: const Icon(Icons.refresh_rounded),
                 label: const Text('Retry'),
+              ),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: _createRoom,
+                icon: const Icon(Icons.add_rounded),
+                label: const Text('Create Room'),
               ),
             ],
           ),
@@ -164,19 +207,47 @@ class _HomeScreenState extends State<HomeScreen> {
                     style: AppTextStyles.body(color: AppColors.textMute),
                   ),
                 ),
+                const SizedBox(height: 16),
+                Center(
+                  child: FilledButton.icon(
+                    onPressed: _createRoom,
+                    icon: const Icon(Icons.add_rounded),
+                    label: const Text('Create Room'),
+                  ),
+                ),
               ],
             )
           : ListView.builder(
               physics: const AlwaysScrollableScrollPhysics(),
               padding: const EdgeInsets.only(bottom: 12),
-              itemCount: rooms.length,
-              itemBuilder: (_, index) => _roomCard(rooms[index]),
+              itemCount: rooms.length + 1,
+              itemBuilder: (_, index) => index == 0
+                  ? Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 2),
+                      child: Align(
+                        alignment: Alignment.centerRight,
+                        child: FilledButton.icon(
+                          onPressed: _createRoom,
+                          icon: const Icon(Icons.add_rounded),
+                          label: const Text('Create Room'),
+                        ),
+                      ),
+                    )
+                  : _roomCard(rooms[index - 1]),
             ),
     );
   }
 
+  Future<void> _createRoom() async {
+    final room = await Navigator.of(context).push<Map<String, dynamic>>(
+      MaterialPageRoute(builder: (_) => const CreateRoomScreen()),
+    );
+    if (!mounted || room == null) return;
+    await _loadRooms();
+    if (mounted) await _joinRoom(room);
+  }
+
   Widget _roomCard(Map<String, dynamic> room) {
-    final ownerId = room['owner_id']?.toString() ?? '';
     final title = room['title']?.toString() ?? 'Voice room';
     final description = room['description']?.toString() ?? '';
     return Padding(
@@ -194,7 +265,14 @@ class _HomeScreenState extends State<HomeScreen> {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              AppAvatar(label: ownerId, size: 48),
+              AppAvatar(
+                label: title,
+                size: 48,
+                imageUrl: _api.imageUrl(
+                  room['image_path'],
+                  bucket: PhoneImageUpload.roomsBucket,
+                ),
+              ),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
@@ -210,13 +288,9 @@ class _HomeScreenState extends State<HomeScreen> {
                       Text(description, style: AppTextStyles.label(size: 11)),
                     ],
                     const SizedBox(height: 6),
-                    Text(
-                      ownerId.isEmpty
-                          ? 'Host'
-                          : 'Host ${ownerId.substring(0, ownerId.length.clamp(0, 8))}',
-                      style: AppTextStyles.label(
-                          size: 10, color: AppColors.textMute),
-                    ),
+                    Text('Host',
+                        style: AppTextStyles.label(
+                            size: 10, color: AppColors.textMute)),
                   ],
                 ),
               ),

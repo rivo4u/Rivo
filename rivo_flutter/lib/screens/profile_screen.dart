@@ -1,6 +1,10 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/rivo_api.dart';
+import '../services/phone_image_upload.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_text_styles.dart';
 import '../widgets/common.dart';
@@ -67,9 +71,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
         .toString();
   }
 
-  String get _userId =>
-      Supabase.instance.client.auth.currentUser?.id ?? widget.userId;
-
   String _value(List<String> keys, {String fallback = '—'}) {
     for (final key in keys) {
       final value = _profile?[key];
@@ -78,70 +79,26 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return fallback;
   }
 
-  Future<void> _editProfile() async {
-    final keys = ['display_name', 'username', 'bio']
-        .where((key) => _profile?.containsKey(key) ?? false)
-        .toList();
-    if (keys.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('No editable profile fields are available.')),
-      );
-      return;
-    }
-    final controllers = {
-      for (final key in keys)
-        key: TextEditingController(text: _profile![key]?.toString() ?? ''),
-    };
-    final changes = await showDialog<Map<String, dynamic>>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Edit profile'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              for (final key in keys)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: TextField(
-                    controller: controllers[key],
-                    maxLength: key == 'bio' ? 160 : 40,
-                    decoration: InputDecoration(
-                      labelText: key.replaceAll('_', ' '),
-                      border: const OutlineInputBorder(),
-                    ),
-                  ),
-                ),
-            ],
-          ),
+  Future<void> _editProfile({XFile? selectedImage}) async {
+    final saved = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => EditProfileScreen(
+          profile: Map.of(_profile ?? {}),
+          initialImage: selectedImage,
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(
-              dialogContext,
-              {for (final key in keys) key: controllers[key]!.text.trim()},
-            ),
-            child: const Text('Save'),
-          ),
-        ],
       ),
     );
-    for (final controller in controllers.values) {
-      controller.dispose();
-    }
-    if (changes == null) return;
+    if (mounted && saved == true) await _loadProfile();
+  }
+
+  Future<void> _chooseAvatar() async {
     try {
-      await _api.updateMyProfile(changes);
-      await _loadProfile();
+      final image = await PhoneImageUpload(Supabase.instance.client).pick();
+      if (mounted && image != null) await _editProfile(selectedImage: image);
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not update profile: $error')),
+          SnackBar(content: Text('Could not select profile photo: $error')),
         );
       }
     }
@@ -206,7 +163,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
                           _header(),
-                          _vipRow(),
+                          if (_profile?.containsKey('vip_level') == true ||
+                              _profile?.containsKey('svip_level') == true)
+                            _vipRow(),
                           SectionCard(
                             child: Row(
                               mainAxisAlignment: MainAxisAlignment.spaceAround,
@@ -302,14 +261,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
         children: [
           Row(
             children: [
-              AppAvatar(
-                label: _displayName,
-                size: 70,
-                imageUrl: (_profile?['avatar_url'] ??
-                        _profile?['avatar'] ??
-                        Supabase.instance.client.auth.currentUser
-                            ?.userMetadata?['picture'])
-                    ?.toString(),
+              InkWell(
+                onTap: _chooseAvatar,
+                customBorder: const CircleBorder(),
+                child: AppAvatar(
+                  label: _displayName,
+                  size: 70,
+                  imageUrl: _api.imageUrl(
+                    _profile?['avatar_path'],
+                    bucket: PhoneImageUpload.avatarsBucket,
+                  ),
+                ),
               ),
               const SizedBox(width: 14),
               Expanded(
@@ -332,7 +294,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       ],
                     ),
                     const SizedBox(height: 3),
-                    Text('ID: $_userId', style: AppTextStyles.label()),
+                    Text('Profile ID: ${_value(['public_id'])}',
+                        style: AppTextStyles.label()),
                   ],
                 ),
               ),
@@ -348,6 +311,23 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     const Icon(Icons.logout_rounded, color: AppColors.textMute),
               ),
             ],
+          ),
+          if ((_profile?['bio']?.toString() ?? '').isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(_profile!['bio'].toString(),
+                  style: AppTextStyles.body(size: 13)),
+            ),
+          ],
+          const SizedBox(height: 10),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton.icon(
+              onPressed: _editProfile,
+              icon: const Icon(Icons.edit_outlined, size: 17),
+              label: const Text('Edit Profile'),
+            ),
           ),
           const SizedBox(height: 18),
           Row(
@@ -368,19 +348,26 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Widget _vipRow() {
+    final cards = <Widget>[
+      if (_profile?.containsKey('vip_level') == true)
+        Expanded(
+          child: _vipCard('VIP ${_value(['vip_level'])}',
+              Icons.favorite_rounded, AppColors.gradientVip),
+        ),
+      if (_profile?.containsKey('svip_level') == true)
+        Expanded(
+          child: _vipCard('SVIP ${_value(['svip_level'])}',
+              Icons.diamond_rounded, AppColors.gradientSvip),
+        ),
+    ];
     return Padding(
       padding: const EdgeInsets.fromLTRB(18, 14, 18, 4),
-      child: Row(
-        children: [
-          Expanded(
-              child: _vipCard('VIP ${_value(['vip_level'], fallback: '0')}',
-                  Icons.favorite_rounded, AppColors.gradientVip)),
-          const SizedBox(width: 10),
-          Expanded(
-              child: _vipCard('SVIP ${_value(['svip_level'], fallback: '0')}',
-                  Icons.diamond_rounded, AppColors.gradientSvip)),
+      child: Row(children: [
+        for (var index = 0; index < cards.length; index++) ...[
+          if (index > 0) const SizedBox(width: 10),
+          cards[index],
         ],
-      ),
+      ]),
     );
   }
 
@@ -402,6 +389,192 @@ class _ProfileScreenState extends State<ProfileScreen> {
             child: Icon(icon, size: 14, color: Colors.white),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class EditProfileScreen extends StatefulWidget {
+  const EditProfileScreen({
+    super.key,
+    required this.profile,
+    this.initialImage,
+  });
+
+  final Map<String, dynamic> profile;
+  final XFile? initialImage;
+
+  @override
+  State<EditProfileScreen> createState() => _EditProfileScreenState();
+}
+
+class _EditProfileScreenState extends State<EditProfileScreen> {
+  final _api = RivoApi(Supabase.instance.client);
+  late final TextEditingController _name;
+  late final TextEditingController _bio;
+  XFile? _image;
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _image = widget.initialImage;
+    final metadata = Supabase.instance.client.auth.currentUser?.userMetadata;
+    _name = TextEditingController(
+      text: (widget.profile['display_name'] ??
+              widget.profile['username'] ??
+              metadata?['full_name'] ??
+              metadata?['name'] ??
+              '')
+          .toString(),
+    );
+    _bio = TextEditingController(text: widget.profile['bio']?.toString() ?? '');
+  }
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _bio.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickImage() async {
+    try {
+      final image = await PhoneImageUpload(Supabase.instance.client).pick();
+      if (mounted && image != null) setState(() => _image = image);
+    } catch (error) {
+      if (mounted)
+        setState(() => _error = 'Could not open photo picker: $error');
+    }
+  }
+
+  Future<void> _save() async {
+    final name = _name.text.trim();
+    if (name.isEmpty || name.length > 40) {
+      setState(() => _error = name.isEmpty
+          ? 'Display name is required.'
+          : 'Use 40 characters or fewer for the display name.');
+      return;
+    }
+    if (_bio.text.trim().length > 160) {
+      setState(() => _error = 'Use 160 characters or fewer for the bio.');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      final changes = <String, dynamic>{
+        'display_name': name,
+        'bio': _bio.text.trim(),
+      };
+      if (_image != null) {
+        changes['avatar_path'] = await _api.uploadImage(
+          _image!,
+          bucket: PhoneImageUpload.avatarsBucket,
+          path:
+              '${Supabase.instance.client.auth.currentUser!.id}/avatar.jpg',
+        );
+      }
+      await _api.updateMyProfile(changes);
+      if (mounted) Navigator.of(context).pop(true);
+    } catch (error) {
+      if (mounted)
+        setState(
+            () => _error = 'Could not save. Tap Retry to try again. $error');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final displayName = _name.text.isEmpty ? 'Rivo user' : _name.text;
+    final existingPhoto = _api.imageUrl(
+      widget.profile['avatar_path'],
+      bucket: PhoneImageUpload.avatarsBucket,
+    );
+    return Scaffold(
+      appBar: AppBar(title: const Text('Edit Profile')),
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.all(18),
+          children: [
+            Center(
+              child: InkWell(
+                onTap: _saving ? null : _pickImage,
+                customBorder: const CircleBorder(),
+                child: Stack(alignment: Alignment.bottomRight, children: [
+                  _image != null
+                      ? CircleAvatar(
+                          radius: 48,
+                          backgroundImage: FileImage(File(_image!.path)),
+                        )
+                      : AppAvatar(
+                          label: displayName,
+                          size: 96,
+                          imageUrl: existingPhoto,
+                        ),
+                  const CircleAvatar(
+                    radius: 16,
+                    child: Icon(Icons.camera_alt_rounded, size: 17),
+                  ),
+                ]),
+              ),
+            ),
+            Center(
+              child: TextButton.icon(
+                onPressed: _saving ? null : _pickImage,
+                icon: const Icon(Icons.photo_library_outlined),
+                label: Text(_image == null ? 'Choose photo' : 'Replace photo'),
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _name,
+              maxLength: 40,
+              textCapitalization: TextCapitalization.words,
+              decoration: const InputDecoration(
+                labelText: 'Display name',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _bio,
+              maxLength: 160,
+              maxLines: 4,
+              decoration: const InputDecoration(
+                labelText: 'Bio',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            InputDecorator(
+              decoration: const InputDecoration(
+                labelText: 'Profile ID',
+                border: OutlineInputBorder(),
+              ),
+              child: Text(widget.profile['public_id']?.toString() ?? '—'),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 12),
+              Text(_error!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error)),
+            ],
+            const SizedBox(height: 16),
+            FilledButton(
+              onPressed: _saving ? null : _save,
+              child: _saving
+                  ? const SizedBox.square(
+                      dimension: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Text(_error == null ? 'Save' : 'Retry'),
+            ),
+          ],
+        ),
       ),
     );
   }
