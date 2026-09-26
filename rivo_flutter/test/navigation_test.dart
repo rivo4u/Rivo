@@ -6,6 +6,7 @@ import 'package:rivo/screens/home_screen.dart';
 import 'package:rivo/screens/profile_screen.dart';
 import 'package:rivo/widgets/common.dart';
 import 'package:rivo/screens/feature_screens.dart';
+import 'package:rivo/widgets/gift_effect_overlay.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -189,5 +190,67 @@ void main() {
     expect(find.text('Coin purchases are unavailable'), findsOneWidget);
     expect(find.textContaining('No coins have been added.'), findsOneWidget);
     expect(find.text('Pay'), findsNothing);
+  });
+
+  testWidgets('gift effects ignore initial history and play queued gifts in order',
+      (tester) async {
+    const catalog = [
+      {
+        'id': 'rose-id',
+        'name': 'Rose',
+        'effect_mode': 'rose_burst',
+        'effect_duration_ms': 1600,
+      },
+    ];
+    final history = [
+      {
+        'id': 'old',
+        'gift_id': 'rose-id',
+        'sender_id': 'old-sender',
+        'receiver_id': 'receiver',
+      },
+    ];
+
+    Widget buildOverlay(List<Map<String, dynamic>> events) => MaterialApp(
+          home: Scaffold(
+            body: GiftEffectOverlay(
+              events: events,
+              initialEventsLoaded: true,
+              giftCatalog: Future.value(catalog),
+              child: const Text('Room'),
+            ),
+          ),
+        );
+
+    await tester.pumpWidget(buildOverlay(history));
+    expect(find.text('old-sender sent Rose to receiver'), findsNothing);
+
+    await tester.pumpWidget(buildOverlay([
+      ...history,
+      {
+        'id': 'first',
+        'gift_id': 'rose-id',
+        'sender_id': 'first-sender',
+        'receiver_id': 'receiver',
+        'quantity': 2,
+      },
+      {
+        'id': 'second',
+        'gift_id': 'rose-id',
+        'sender_id': 'second-sender',
+        'receiver_id': 'receiver',
+      },
+    ]));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('first-sender sent Rose to receiver'), findsOneWidget);
+    expect(find.text('Quantity 2'), findsOneWidget);
+    expect(find.text('second-sender sent Rose to receiver'), findsNothing);
+
+    await tester.pump(const Duration(milliseconds: 1700));
+    await tester.pump(const Duration(milliseconds: 20));
+    expect(find.text('second-sender sent Rose to receiver'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
   });
 }

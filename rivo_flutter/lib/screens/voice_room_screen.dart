@@ -4,6 +4,7 @@ import '../theme/app_colors.dart';
 import '../theme/app_text_styles.dart';
 import '../services/rivo_api.dart';
 import '../widgets/common.dart';
+import '../widgets/gift_effect_overlay.dart';
 import '../widgets/game_sheet.dart';
 import '../widgets/room_tools_sheet.dart';
 import 'feature_screens.dart';
@@ -191,14 +192,23 @@ class _VoiceRoomScreenState extends State<VoiceRoomScreen> {
       child: Scaffold(
         backgroundColor: AppColors.roomDeep,
         body: SafeArea(
-          child: Column(
-            children: [
-              _header(context),
-              _seatsGrid(),
-              _roomGiftBanner(),
-              Expanded(child: _chatArea()),
-              _inputBar(context),
-            ],
+          child: StreamBuilder<List<Map<String, dynamic>>>(
+            stream: _giftStream,
+            builder: (context, snapshot) => GiftEffectOverlay(
+              key: ValueKey(_streamVersion),
+              events: snapshot.data ?? const [],
+              initialEventsLoaded: _giftStream == null || snapshot.hasData,
+              giftCatalog: _giftCatalog,
+              child: Column(
+                children: [
+                  _header(context),
+                  _seatsGrid(),
+                  _roomGiftBanner(snapshot),
+                  Expanded(child: _chatArea()),
+                  _inputBar(context),
+                ],
+              ),
+            ),
           ),
         ),
       ),
@@ -325,58 +335,50 @@ class _VoiceRoomScreenState extends State<VoiceRoomScreen> {
     );
   }
 
-  Widget _roomGiftBanner() {
-    final giftStream = _giftStream;
-    if (giftStream == null) return const SizedBox.shrink();
-    return StreamBuilder<List<Map<String, dynamic>>>(
-      stream: giftStream,
-      builder: (context, snapshot) {
-        if (snapshot.hasError) {
-          return _roomNotice('Gift activity is unavailable: ${snapshot.error}');
+  Widget _roomGiftBanner(
+      AsyncSnapshot<List<Map<String, dynamic>>> snapshot) {
+    if (_giftStream == null) return const SizedBox.shrink();
+    if (snapshot.hasError) {
+      return _roomNotice('Gift activity is unavailable: ${snapshot.error}');
+    }
+    if (!snapshot.hasData) {
+      return const LinearProgressIndicator(minHeight: 2);
+    }
+    if (snapshot.data!.isEmpty) return const SizedBox.shrink();
+    final latest = snapshot.data!.last;
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: _giftCatalog,
+      builder: (context, giftsSnapshot) {
+        if (giftsSnapshot.hasError) {
+          return _roomNotice(
+              'Gift details are unavailable: ${giftsSnapshot.error}');
         }
-        if (!snapshot.hasData) {
+        if (!giftsSnapshot.hasData) {
           return const LinearProgressIndicator(minHeight: 2);
         }
-        if (snapshot.data!.isEmpty) {
-          return const SizedBox.shrink();
-        }
-        final latest = snapshot.data!.last;
-        return FutureBuilder<List<Map<String, dynamic>>>(
-          future: _giftCatalog,
-          builder: (context, giftsSnapshot) {
-            if (giftsSnapshot.hasError) {
-              return _roomNotice(
-                  'Gift details are unavailable: ${giftsSnapshot.error}');
-            }
-            if (!giftsSnapshot.hasData) {
-              return const LinearProgressIndicator(minHeight: 2);
-            }
-            final giftId = latest['gift_id']?.toString();
-            final gift = giftsSnapshot.data!
-                .where((row) => row['id']?.toString() == giftId)
-                .firstOrNull;
-            final giftName = gift?['name'] ??
-                gift?['title'] ??
-                gift?['gift_name'] ??
-                giftId ??
-                'Gift';
-            final amount = latest['coin_amount'] ??
-                latest['price'] ??
-                latest['amount'] ??
-                '?';
-            final sender = latest['sender_id']?.toString() ?? 'Someone';
-            final receiver = latest['receiver_id']?.toString() ?? 'someone';
-            return Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              color: AppColors.greenDark.withValues(alpha: 0.35),
-              child: Text('$sender sent $giftName to $receiver · $amount coins',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style:
-                      AppTextStyles.label(size: 10, color: AppColors.roomText)),
-            );
-          },
+        final giftId = latest['gift_id']?.toString();
+        final gift = giftsSnapshot.data!
+            .where((row) => row['id']?.toString() == giftId)
+            .firstOrNull;
+        final giftName = gift?['name'] ??
+            gift?['title'] ??
+            gift?['gift_name'] ??
+            giftId ??
+            'Gift';
+        final amount = latest['coin_amount'] ??
+            latest['price'] ??
+            latest['amount'] ??
+            '?';
+        final sender = latest['sender_id']?.toString() ?? 'Someone';
+        final receiver = latest['receiver_id']?.toString() ?? 'someone';
+        return Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          color: AppColors.greenDark.withValues(alpha: 0.35),
+          child: Text('$sender sent $giftName to $receiver · $amount coins',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: AppTextStyles.label(size: 10, color: AppColors.roomText)),
         );
       },
     );
