@@ -83,10 +83,25 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.bg,
-      body: SafeArea(child: _selectedPage()),
-      bottomNavigationBar: RivoBottomNav(
-        currentIndex: _selectedTab,
-        onTap: _onNavigationTap,
+      resizeToAvoidBottomInset: false,
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 78),
+              child: SafeArea(child: _selectedPage()),
+            ),
+          ),
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: RivoBottomNav(
+              currentIndex: _selectedTab,
+              onTap: _onNavigationTap,
+            ),
+          ),
+        ],
       ),
     );
   }

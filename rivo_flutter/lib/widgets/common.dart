@@ -158,34 +158,52 @@ class RivoBottomNav extends StatelessWidget {
   Widget build(BuildContext context) {
     return SafeArea(
       top: false,
-      child: Container(
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          border: Border(top: BorderSide(color: AppColors.cardBorder)),
-        ),
-        padding: const EdgeInsets.only(top: 10, bottom: 8),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceAround,
-          children: List.generate(_items.length, (i) {
-            final active = i == currentIndex;
-            final item = _items[i];
-            return InkWell(
-              onTap: () => onTap(i),
-              child: Column(
-                children: [
-                  Icon(item.icon, size: 20, color: active ? AppColors.greenDark : AppColors.textMute),
-                  const SizedBox(height: 4),
-                  Text(
-                    item.label,
-                    style: AppTextStyles.label(
-                      size: 10.5,
-                      color: active ? AppColors.greenDark : AppColors.textMute,
-                    ).copyWith(fontWeight: active ? FontWeight.w800 : FontWeight.w600),
+      child: Directionality(
+        textDirection: TextDirection.ltr,
+        child: Container(
+          width: double.infinity,
+          constraints: const BoxConstraints(minHeight: 74),
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            border: Border(top: BorderSide(color: AppColors.cardBorder)),
+          ),
+          padding: const EdgeInsets.only(top: 10, bottom: 8),
+          child: Row(
+            children: List.generate(_items.length, (i) {
+              final active = i == currentIndex;
+              final item = _items[i];
+              return Expanded(
+                child: InkWell(
+                  onTap: () => onTap(i),
+                  child: SizedBox(
+                    height: 54,
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(item.icon,
+                            size: 20,
+                            color: active
+                                ? AppColors.greenDark
+                                : AppColors.textMute),
+                        const SizedBox(height: 4),
+                        Text(
+                          item.label,
+                          style: TextStyle(
+                            fontSize: 10.5,
+                            color: active
+                                ? AppColors.greenDark
+                                : AppColors.textMute,
+                            fontWeight:
+                                active ? FontWeight.w800 : FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                ],
-              ),
-            );
-          }),
+                ),
+              );
+            }),
+          ),
         ),
       ),
     );
